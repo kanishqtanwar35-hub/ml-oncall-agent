@@ -335,3 +335,45 @@ def test_an_ambiguous_verdict_is_flagged_rather_than_committed_to():
 
 def test_a_clear_verdict_is_not_flagged_ambiguous():
     assert not investigate(evidence_for("concept_drift")).diagnosis.ambiguous
+
+
+def test_the_verdict_needs_no_third_party_package():
+    """The claim the `core-only` CI job exists to prove, asserted locally too.
+
+    It was FALSE until CI caught it: `graph.py` imported `typing_extensions` at
+    module scope, so importing the module - and therefore reaching the
+    deterministic verdict at all - required a package the README said was
+    unnecessary. The import is now a try/except.
+
+    This blocks the imports rather than checking whether they happen to be
+    absent, because on a developer machine they are always present and the test
+    would pass without proving anything.
+    """
+    import subprocess
+    import sys
+
+    script = """
+import sys
+BLOCKED = ("typing_extensions", "langgraph", "mcp", "pydantic")
+
+class Block:
+    def find_spec(self, name, path=None, target=None):
+        if name.split(".")[0] in BLOCKED:
+            raise ImportError("blocked: " + name)
+        return None
+
+sys.meta_path.insert(0, Block())
+
+from oncall.agents.graph import investigate_without_graph
+from oncall.incidents import SCENARIOS, evidence_for
+
+wrong = [s.name for s in SCENARIOS
+         if investigate_without_graph(evidence_for(s.name)).diagnosis.root_cause
+         != s.root_cause]
+assert not wrong, wrong
+print("OK")
+"""
+    result = subprocess.run([sys.executable, "-c", script],
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert "OK" in result.stdout

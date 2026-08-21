@@ -43,7 +43,21 @@ import operator
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
-from typing_extensions import Annotated, TypedDict
+try:
+    # LangGraph and pydantic both prefer typing_extensions - on Python 3.11 a
+    # `typing.TypedDict` used as a pydantic field raises outright. So prefer it
+    # when it is installed.
+    from typing_extensions import Annotated, TypedDict
+except ImportError:
+    # ...but do not REQUIRE it. `investigate_without_graph` and the whole
+    # deterministic verdict need no third-party package at all, and importing
+    # this module must not be what breaks that.
+    #
+    # CI caught this, which is the entire reason the `core-only` job exists:
+    # it installs nothing but pytest, so a module-scope dependency here fails
+    # it while the full matrix stays green. The claim in the README was simply
+    # untrue until this ran.
+    from typing import Annotated, TypedDict        # type: ignore[assignment]
 
 from oncall.agents.specialists import (
     RECOMMENDED_ACTION,
