@@ -1,0 +1,13 @@
+# The reasoning core needs NOTHING. `pip install pytest` is enough to run the
+# diagnosis and most of the suite - that is the point of keeping the verdict
+# deterministic rather than generated.
+pytest>=7.4
+
+# The graph. Offline: the supervisor routes by a plain Python rule, so no
+# model and no API key is involved at any point.
+langgraph>=1.0
+
+# The protocol server. Optional - the tools are plain functions first and MCP
+# tools second, and the suite skips these tests when it is absent.
+mcp>=2.0
+typing-extensions>=4.9

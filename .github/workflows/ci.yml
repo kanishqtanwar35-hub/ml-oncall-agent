@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # The claim this job proves: the REASONING needs nothing but Python. If the
+  # diagnosis ever starts depending on langgraph or mcp, this job fails while
+  # the full job below stays green - which is the signal you want, because the
+  # full job would never notice.
+  # ---------------------------------------------------------------------------
+  core-only:
+    name: reasoning with no dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install nothing but pytest
+        run: python -m pip install --upgrade pip pytest
+
+      - name: The deterministic verdict still works
+        env:
+          PYTHONPATH: src
+        run: |
+          python - <<'PY'
+          from oncall.agents.graph import investigate_without_graph, recommended_action
+          from oncall.incidents import SCENARIOS, evidence_for
+
+          wrong = []
+          for scenario in SCENARIOS:
+              run = investigate_without_graph(evidence_for(scenario.name))
+              if run.diagnosis.root_cause != scenario.root_cause:
+                  wrong.append(f"{scenario.name}: {run.diagnosis.root_cause}")
+              print(f"{scenario.name:16} -> {run.diagnosis.root_cause:15} "
+                    f"{recommended_action(run.diagnosis)}")
+          assert not wrong, wrong
+          print("\nall root causes correct with zero third-party packages")
+          PY
+
+  tests:
+    name: full suite (${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Tests
+        env:
+          PYTHONPATH: src
+        run: pytest -q
+
+      - name: The agent is scored against ground truth
+        env:
+          PYTHONPATH: src
+        # Exits non-zero if task success is not 100%.
+        run: python -m oncall.cli evaluate
+
+      - name: What each artifact is actually worth
+        env:
+          PYTHONPATH: src
+        run: python -m oncall.cli ablate
+
+      - name: A full incident report renders
+        env:
+          PYTHONPATH: src
+        run: python -m oncall.cli investigate concept_drift
+
+      - name: The MCP server answers over the protocol
+        env:
+          PYTHONPATH: src
+        run: |
+          python - <<'PY'
+          import asyncio
+          from mcp.client import Client
+          from oncall.mcp_server import build_server
+
+          async def main():
+              # In-process: no subprocess, no port, no flakiness from either.
+              async with Client(build_server()) as client:
+                  tools = await client.list_tools()
+                  print("tools:", sorted(t.name for t in tools.tools))
+                  result = await client.call_tool(
+                      "investigate_incident", {"incident": "bad_deploy"})
+                  assert result.is_error is False
+                  payload = result.structured_content["result"]
+                  assert payload["root_cause"] == "bad_deploy", payload
+                  print("root_cause:", payload["root_cause"],
+                        "| action:", payload["recommended_action"],
+                        "| findings:", len(payload["findings"]))
+                  bad = await client.call_tool(
+                      "investigate_incident", {"incident": "nope"})
+                  assert bad.is_error is True
+                  print("bad input correctly errored")
+          asyncio.run(main())
+          PY
